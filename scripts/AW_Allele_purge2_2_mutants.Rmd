@@ -1,0 +1,234 @@
+---
+title: "AllelePurge_Fig4Table4"
+author: "Audrey"
+date: "30/04/2020"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Load libraries and data
+```{r}
+library(readr)
+library(ggplot2)
+library(tidyverse)
+library(devtools)
+library(gridExtra)
+library(effects)
+library(emmeans)
+library(car)
+library(lme4)
+library(binom)
+#library(Rmisc)
+```
+
+```{r}
+purge2 <- read.csv("../data/AW_Allele_purge_2_counts.csv")
+
+data_freq2 <- mutate(purge2, mut_male_freq = mutant_male/100, 
+                    mut_fem_freq = mutant_fem/100, start_freq = 0.7)
+
+
+data_freq2$wt_total <- with(data_freq2, wt_male + wt_fem)
+data_freq2$mutant_total <- with(data_freq2, mutant_male + mutant_fem)
+
+
+#data_freq2$dummy_offset <- qlogis(0.7) # offset for logistic regression.
+
+data_freq2<- mutate(data_freq2, dummy_offset = ifelse(
+   mutant_type == "white", qlogis(0.595), qlogis(0.49)
+))
+#changed dummy offset so it was starting mutant frequency (0.49 for second chromosome mutations and 0.595 for X-linked mutations) instead of starting allele frequency
+
+data_freq2$replicate <- as.factor(data_freq2$replicate)
+data_freq2 <- na.omit(data_freq2)
+```
+
+Model
+The ANOVA outputs are used in Table 3 and the contrast estimates generated from emtrends are used in Table 4 of the MS. This code needs to be run to generate Figure 4.
+```{r}
+mutants_glmm2 <- glmer( cbind(mutant_total, wt_total) ~
+                  0 
+                  + generation:treatment 
+                  + generation:mutant_type
+                  + generation:treatment:mutant_type
+                  + (0 + generation | mutant_type:treatment:replicate) + 
+                    offset(dummy_offset), 
+                family = "binomial", 
+                data = data_freq2)
+summary(mutants_glmm2)
+Anova(mutants_glmm2)
+
+est <- emtrends(mutants_glmm2, 
+                c("treatment", "mutant_type"), 
+                var = "generation", transform = "none")
+
+est
+summary(est)
+plot(est)
+
+pairs( emtrends(mutants_glmm2, c("treatment"), var = "generation", transform = "none"))
+```
+
+Separate sexes
+The ANOVA outputs are used in Table 3 and the contrast estimates generated from emtrends are used in Table 4 of the MS.
+```{r}
+male_glmm2 <- glmer( cbind(mutant_male, wt_male) ~
+                  0 
+                  + generation:treatment 
+                  + generation:mutant_type
+                  + generation:treatment:mutant_type
+                  + (0 + generation | mutant_type:treatment:replicate) + 
+                    offset(dummy_offset), 
+                family = "binomial", 
+                data = data_freq2)
+summary(male_glmm2)
+Anova(male_glmm2)
+
+est_m <- emtrends(male_glmm2, 
+                c("treatment", "mutant_type"), 
+                var = "generation", transform = "none")
+
+est_m
+summary(est_m)
+plot(est_m)
+
+pairs( emtrends(male_glmm2, c("treatment"), var = "generation", transform = "none"))
+
+female_glmm2 <- glmer( cbind(mutant_fem, wt_fem) ~
+                  0 
+                  + generation:treatment 
+                  + generation:mutant_type
+                  + generation:treatment:mutant_type
+                  + (0 + generation | mutant_type:treatment:replicate) + 
+                    offset(dummy_offset), 
+                family = "binomial", 
+                data = data_freq2)
+summary(female_glmm2)
+Anova(female_glmm2)
+
+est_f <- emtrends(female_glmm2, 
+                c("treatment", "mutant_type"), 
+                var = "generation", transform = "none")
+
+est_f
+summary(est_f)
+plot(est_f)
+
+pairs( emtrends(female_glmm2, c("treatment"), var = "generation", transform = "none"))
+```
+
+
+Plot - Figure 4
+
+```{r}
+#set up
+#do separate for each allele type
+predicted_glmm_auto <- as.data.frame(predictorEffects(mutants_glmm2, ~ generation, 
+                                              focal.levels = 5, 
+                                              fixed.predictors = 
+                                                list(offset = qlogis(0.49))))
+predicted_glmm_auto <- as.data.frame(predicted_glmm_auto)
+predicted_glmm_auto <- subset(predicted_glmm_auto, generation.mutant_type == "vestigial")
+
+predicted_glmm_x <- as.data.frame(predictorEffects(mutants_glmm2, ~ generation, 
+                                              focal.levels = 5, 
+                                              fixed.predictors = 
+                                                list(offset = qlogis(0.595))))
+predicted_glmm_x <- as.data.frame(predicted_glmm_x)
+predicted_glmm_x <- subset(predicted_glmm_x, generation.mutant_type == "white")
+
+#without the offset argument the intercept is averaged. Can set the offset to either 0.49 (autosomal) or 0.595 (x-linked) 
+
+
+#get data frame in order for plotting
+averaged_data_test <- data_freq2 %>%
+  group_by(mutant_type, treatment, generation) %>% 
+  summarise(mutant_freq = mean((mut_male_freq + mut_fem_freq)/2), 
+            sd = sd((mut_male_freq + mut_fem_freq)/2),
+            mutant_count = mean(mutant_total))
+
+predicted_glmm_both <- rbind(predicted_glmm_auto, predicted_glmm_x)
+
+averaged_data_test <- data.frame(averaged_data_test, predicted_glmm_both[, 4:7])
+
+#plot
+linear_plot <- ggplot(data = averaged_data_test, aes(x = generation, y = mutant_freq, colour = treatment)) +
+  theme_classic(base_size = 24) +
+  theme(strip.text = element_text(face = "italic")) +
+  labs(x = "Generation", y = "Mutant Genotypic Frequency") +
+  geom_pointrange(aes(ymin = (mutant_freq - sd), ymax = (mutant_freq + sd)), size = 1, shape = 16, 
+                  position = position_jitterdodge(dodge.width = 0.4)) +
+  geom_ribbon(aes(ymin = generation.lower, ymax = generation.upper, fill = treatment), 
+              alpha = 0.4) +
+  facet_wrap(~mutant_type) +
+  scale_colour_manual(breaks = c("NC", "PNT", "NT", "UCT", "SCT"), values = c("#000000","#616161","#DB6D00", "#E69F00", "#039BE5")) +
+  scale_x_continuous(breaks = seq(0, 10, 2)) +
+  scale_y_continuous(breaks = seq(0, 1, 0.3)) +
+  scale_fill_manual(breaks = c("NC", "PNT", "NT", "UCT", "SCT"), values = c("#000000","#616161","#DB6D00", "#E69F00", "#039BE5")) +
+  theme(legend.position = "none")
+
+linear_plot
+
+#contrasts
+est <- as.data.frame(est)
+contrasts_plot <- ggplot(data = est, aes(x = treatment, y = generation.trend)) +
+  geom_pointrange(aes(ymin = asymp.LCL, ymax = asymp.UCL, colour = treatment), size = 1) +
+  coord_flip() +
+  facet_wrap(~mutant_type, ncol = 1, strip.position = "right") +
+  scale_colour_manual(breaks = c("NC", "PNT", "NT", "UCT", "SCT"), values = c("#000000","#616161","#DB6D00", "#E69F00", "#039BE5"), 
+                      labels = c("VNC", "VC", "NT", "UCT", "SCT")) +
+  theme_classic(base_size = 24) +
+  labs(x = NULL, y = "Generation Trend", colour = "Treatment") +
+  theme(axis.text.y = element_blank(), axis.line.y = element_blank(), axis.ticks.y = element_blank())
+
+#final plot
+Fig4 <- grid.arrange(linear_plot, contrasts_plot, nrow = 1, widths = c(1.5, 1))
+```
+
+
+----ADDITIONAL ANALYSES; Not in MS
+
+```{r}
+data_freq2 <- data_freq2 %>% mutate(mutant_freq = (mut_male_freq + mut_fem_freq)/2, model = predict(mutants_glmm2, type = "response"))
+
+data_freq2 %>% 
+  ggplot() +
+  geom_point(aes(generation, mutant_freq, colour = treatment), size =4, alpha = 0.4) +
+  facet_wrap(~mutant_type) +
+  theme_classic(base_size = 24) +
+  theme(strip.text = element_text(face = "italic")) +
+  labs(x = "Generation", y = "Mutant Frequency") +
+  scale_color_manual(breaks = c("NC", "PNT", "NT", "UCT", "SCT"), values = c("#000000","#616161","#DB6D00", "#E69F00", "#039BE5")) +
+  scale_x_continuous(breaks = seq(0, 4, 2)) +
+  scale_y_continuous(breaks = seq(0, 1, 0.3)) +
+  geom_smooth(aes(generation, model, colour = treatment), size = 2, se = FALSE)
+#need to add confidence intervals
+
+
+```
+
+Compare the sexes
+```{r}
+data_freq2 <- data_freq2 %>% mutate(model_m = predict(male_glmm2, type = "response"),
+                                    model_f = predict(female_glmm2, type = "response"))
+
+data_freq2 %>% 
+  ggplot() +
+  geom_point(aes(generation, mut_male_freq, colour = treatment), size =4, alpha = 0.4, shape = 16) +
+  geom_point(aes(generation, mut_fem_freq, colour = treatment), size =4, alpha = 0.4, shape = 17) +
+  facet_wrap(~mutant_type) +
+  theme_classic(base_size = 24) +
+  theme(strip.text = element_text(face = "italic")) +
+  labs(x = "Generation", y = "Mutant Frequency") +
+  scale_color_manual(breaks = c("NC", "PNT", "NT", "UCT", "SCT"), values = c("#000000","#616161","#DB6D00", "#E69F00", "#039BE5")) +
+  scale_x_continuous(breaks = seq(0, 4, 2)) +
+  scale_y_continuous(breaks = seq(0, 1, 0.3)) +
+  geom_smooth(aes(generation, model_m, colour = treatment), size = 2, se = FALSE) +
+  geom_smooth(aes(generation, model_f, colour = treatment), size = 2, linetype = 2, se = FALSE)
+```
+
